@@ -5,7 +5,7 @@ title: Folding, Foldable and Folds
 
 ## Introduction
 
-_Folding_ is a form of computation that aggregates many values into a single whole by successive applications of a single step. 
+_Folding_ is a form of computation that aggregates many values into a single whole by successive applications of a step function. 
 
 The beauty of folding shines from the fact that can be used to express almost any form computation: any combination of _map_, _filter_, _reduce_ is a variety of folding; and any recursion can be done with folding. It is thus ubiquitous in programming languages and a cornerstone to Haskell. 
 
@@ -19,7 +19,7 @@ This lesson is divided into two parts:
 
 ## Folding
 
-### First example: folding into a empty container
+### First example: folding into a container
 
 Let's say we have a list:
 
@@ -27,63 +27,102 @@ Let's say we have a list:
 [1,2,3,4,5] :: [Int]
 ```
 
-from which we want to remove values bigger than 3. Let's say we don't know that Haskell provides the `filter` function:
+from which we want to keep only the values above 3 and convert to strings, which finally want to concatenate. We could do this with a composition of
 
 ```
 filter :: [a] -> (a -> Bool) -> [a]
+map :: (a -> b) -> [a] -> [b]
+concat :: [a] -> [a] -> [a]
 ```
-
-We can still implement such a function with folding. Here's what we need:
-
-- a container: to hold the result of the folding (here: to hold the values below 3)
-- a "computation": to operate on every value, on after the other (here: to check, for every element presented to it, whether it is bigger than three)
-- a step function: to take the result of the "computation" into the container.
-
-We can see that the "computation" and the step functions work in a single pass: in fact, the computation could also be seen as a part of the step function, i.e. the part that applies to the value, while the rest of the step function plays the role of extracting the result from the original data structure into the container. So we can simplify our above "shopping list" to:
-
-- a container: to hold the result of the folding (here: to hold the values below 3)
-- a step function: to operate on every value, on after the other, a combines the results with the container.
-
-In Haskell, this is all we need to implement our simple filter algorithm:
+namely:
 
 ```
-foldl (\acc val -> if val > 3 then val : acc else acc) [] [1,2,3,4,5]
+concatMapFilterAbove3 = concat . map show . filter (> 3)
 ```
 
-Let's zoom in on the parts of this expression that correspond to our shopping list:
+or more generally:
 
 ```
-    (\acc val -> ...val... : acc ) <-- step function
-        [] <-- container
+concatMapFilter f p elements = concat . map f . filter p $ elements
 ```
 
-So our step function:
+Defined in this way, our `concatMapFilter` function means to apply `map`, `filter` and `concat` sequentially: first by filtering every element; then by mapping them; finally by concatenating them. 
 
-1. takes as input a 2-place function, that is, a function taking an `acc` and a `val`; then
-2. it does something with the `val` (not showns -- the "...val..." part), and _combines_ the results with the `acc`, which here means writing the value into the container.
+Now the Haskell compiler is clever enough to figure out that there is no gain from working sequentially here, and so kind as to transform the mapping and the filtering so that every element is filtered, mapped and concatenated in one go. But this is not cool for at least two reasons:
 
-Here notice that the operation by means of which values are combined into the container is `cons`:
+1. Conceptually it was never our intention to express the notion of _traversing the list several times_; in point of fact we would be happy to traverse it once.
+2. We relied on the compiler to understand something different (and optimized) from what our code means.
+
+Better would be to express what we really mean ourselves (a single traversal). And surprise! this can be done with a `foldl` as in:
 
 ```
-cons :: a -> [a] -> [a]
+mapFilterAbove3 =
+    foldl (\acc v -> if v > 3 then acc <> show v else acc) mempty
 ```
 
-`cons` has an infix notation: (`:`). It comes in handy since, by definition, the step function in folding combines exactly two things. Infix notation captures this fact by reflecting the relational character of the combining operation.
+or more generally:
 
+```
+mapFilter f p = 
+    foldl (\acc v if p v then acc <> f v else acc) mempty
+```
 
-### Second example: folding in place
+Now the mapping, the filtering and the concatening are internal to the `(\... -> ...)` function. The fact that the list is traversed once is made explicit as we no longer rely on `map` and `filter`. 
 
-Notice that, in the above example, folding was defined in terms of processing individual values from a collective data structure (`[1,2,3,4,5]`) into another collective data structure (the empty `[]`). But folding does not necessarily yield a collective data structure. This is because one can define a step function which fulfils its combination duty without the mediation of a collective datastructure to aggregate the values as they come out of the step function. It can simply combines two values into one, and use the result as the value with which the next value to be processed will combined with. Look at this:
+Good. So how does `foldl` work?
+
+```
+foldl :: Foldable t => (b -> a -> b) -> b -> t a -> b
+```
+
+This is less scary if we ignoring the outermost `->`. It boils down to
+
+```
+(b -> a -> b)   step function
+b               initial value
+t a             t-"foldable" container of a-values
+b               final value
+```
+
+Our earlier example instantiates this as:
+
+```
+([Char] -> Int -> [Char])   step function
+[Char]                      initial (empty) string
+[Int]                       list of Int's
+[Char]                      final string
+```
+Conceptually this computation involves two steps:
+1. (base case)
+    - the initial empty string is passed to the first argument of the step function
+    - the head `Int` of the `[Int]` is passed to the second argument of the step function
+    - the step function then either yields an empty string (if the value was not bigger than 3) or a modified string (with the stringified valued appended).
+2. (until the container is empty) the string is appended all the other stringified `Int`s bigger than 3 as they are extracted from `[Int]`.
+
+With this you can see already what folding is all about: 
+- from
+    - a container structure holding values; and
+    - a step function
+- folding over the container is: 
+    - to consume values as they are extracted from the container one by one, combining the results into a value that is fed back to the step function until the container has been fully consumed.
+
+### Second example: reducing
+
+In the above example, folding was defined in terms of processing individual values from a container data structure (`[1,2,3,4,5]`) into another container data structure -- the empty `[Char]`. But folding does not necessarily yield a container data structure -- it can yield any type of value.
+
+"Reducing" is a how colloquially one refers to a step function that combines its inputs as an output that is not a container itself. Consider:
 
 ```
 foldl (\acc val -> acc + val) 0 [1,2,3,4,5]
 ```
 
-The output of this function is 15. Instead of using an empty container data structure, the step function combined values -- digits -- directly, thanks to the addition operation. In other words, `acc` didn't accumulate by means of storing a sequence of values; it "accumulated" the sum of all the numbers that preceded the number in the `val` variable at any point. And taking advantage of the infix notation, we can rewrite this to:
+more readable when rewritten to
 
 ```
 foldl (+) 0 [1,2,3,4,5]
 ```
+
+Here the step function takes two `Int`s to their sum; it does not accumulate by injecting one into another. So _folding into a container_ and _reducing_ are two special cases of the general form of computation, just _folding_, summarized at the end of the previous section. 
 
 ### Folding directions: foldl vs foldr
 
@@ -151,9 +190,9 @@ foldr (\val acc -> if val < 3 then acc + val else 0) 0 [1..]
 Since we're using `foldr`, the folding happens right-to-left. On its first run, the step function evaluates `0 < 3`. It checks, so it adds 1 to 0. On the second run, it checks, so it adds 2 to 1. On the third run, it does not check, so the step function returns 0. Why does passing 0 makes the function terminate? Look closer at how this works:
 
 ```
-0. (+0)             -- start
-1. (+0(+1))
-2. (+0(+1(+2)))	0   -- finish, returning 0 now
+0. (0)             -- start
+1. (+1(+0))
+2. (+2(+1(+0)))	0   -- finish, as adding one more 0 terminated the sequence
 ```
 
 After the second application of the step function, so after the second step, the function stops because passing `0` to the accumulator exhausted it. Indeed, the expression `(+0(+1(+2)))` becomes "complete" (terms of art: saturated) because passing it 0 makes it evaluate to 0+(+0(+1(+2))), which is indeed equal to 3.
